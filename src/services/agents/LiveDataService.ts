@@ -158,7 +158,7 @@ export class LiveDataService {
           model_number
         )
       `)
-      .in('status', ['new', 'open', 'assigned', 'in_progress', 'on_hold'])
+      .in('status', ['open', 'scheduled', 'in_progress'])
       .order('priority', { ascending: true })
       .order('scheduled_date', { ascending: true, nullsFirst: false })
       .limit(limit);
@@ -593,8 +593,8 @@ export class LiveDataService {
           model_number
         )
       `)
-      .in('status', ['new', 'open'])
-      .in('priority', ['emergency', 'high'])
+      .in('status', ['open', 'scheduled'])
+      .in('priority', ['urgent', 'high'])
       .is('assigned_to', null)
       .order('priority', { ascending: true })
       .order('created_at', { ascending: true })

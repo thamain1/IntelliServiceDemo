@@ -210,7 +210,7 @@ class AgentOrchestrator {
       });
 
       const tickets = await LiveDataService.getOpenTickets(10);
-      const urgentTickets = tickets.filter(t => t.priority === 'emergency' || t.priority === 'high');
+      const urgentTickets = tickets.filter(t => t.priority === 'urgent' || t.priority === 'high');
 
       // Emit dispatch analysis
       const dispatchContent = urgentTickets.length > 0
