@@ -209,13 +209,17 @@ class AgentOrchestrator {
         status: 'THINKING',
       });
 
-      const tickets = await LiveDataService.getOpenTickets(10);
+      const tickets = await LiveDataService.getOpenTickets(20);
       const urgentTickets = tickets.filter(t => t.priority === 'urgent' || t.priority === 'high');
+      const priorityOrder: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
+      const unassignedTickets = tickets
+        .filter(t => !t.assignedTo)
+        .sort((a, b) => (priorityOrder[a.priority || 'normal'] ?? 2) - (priorityOrder[b.priority || 'normal'] ?? 2));
 
       // Emit dispatch analysis
-      const dispatchContent = urgentTickets.length > 0
-        ? `[ANALYSIS] **Live Dispatch Analysis**\n\nFound ${tickets.length} open tickets\n- Urgent: ${urgentTickets.length} (emergency/high priority)\n- Unassigned: ${tickets.filter(t => !t.assignedTo).length}\n\n**Priority Ticket:**\n- #${urgentTickets[0]?.ticketNumber || 'N/A'}: ${urgentTickets[0]?.title || 'N/A'}\n- Customer: ${urgentTickets[0]?.customerName || 'Unknown'}\n- Location: ${urgentTickets[0]?.address || 'No address'}, ${urgentTickets[0]?.city || ''}\n- Priority: ${urgentTickets[0]?.priority || 'normal'}\n\n**Routing to Tech Co-Pilot for analysis.**`
-        : `[ANALYSIS] **Live Dispatch Analysis**\n\nFound ${tickets.length} open tickets\n- No urgent tickets at this time\n- Unassigned: ${tickets.filter(t => !t.assignedTo).length}\n\n**System nominal.**`;
+      const dispatchContent = unassignedTickets.length > 0
+        ? `[ANALYSIS] **Live Dispatch Analysis**\n\nFound ${tickets.length} open tickets\n- Unassigned: ${unassignedTickets.length}\n- Urgent/High: ${urgentTickets.length}\n\n**Unassigned Tickets (priority order):**\n${unassignedTickets.slice(0, 3).map(t => `- #${t.ticketNumber}: ${t.title} (${t.priority || 'normal'}) — ${t.customerName}`).join('\n')}${unassignedTickets.length > 3 ? `\n- ...and ${unassignedTickets.length - 3} more` : ''}\n\n**Routing to Tech Co-Pilot for analysis.**`
+        : `[ANALYSIS] **Live Dispatch Analysis**\n\nFound ${tickets.length} open tickets\n- All tickets are currently assigned\n- Urgent/High: ${urgentTickets.length}\n\n**System nominal.**`;
 
       await this.delay(800);
       this.emitMessage({
@@ -376,11 +380,11 @@ class AgentOrchestrator {
         cost: calculateCost('PARTS', 600, 120),
       });
 
-      // Step 4: Generate action if there's an urgent unassigned ticket
-      const unassignedUrgent = urgentTickets.find(t => !t.assignedTo);
-      const recommendedTech = techsWithInventory[0];
+      // Step 4: Generate assignment proposals for ALL unassigned tickets
+      const availableTechs = [...techsWithInventory];
+      const ticketsToAssign = unassignedTickets.slice(0, Math.min(unassignedTickets.length, 10));
 
-      if (unassignedUrgent && recommendedTech) {
+      if (ticketsToAssign.length > 0 && availableTechs.length > 0) {
         await this.delay(800);
         this.emitMessage({
           id: crypto.randomUUID(),
@@ -388,28 +392,46 @@ class AgentOrchestrator {
           fromAgent: 'DISPATCH',
           toAgent: 'ARCHITECT',
           type: 'RESPONSE',
-          content: `[REROUTE] **Assignment Recommendation**\n\nTicket #${unassignedUrgent.ticketNumber}\n- ${unassignedUrgent.title}\n- Customer: ${unassignedUrgent.customerName}\n- Priority: ${unassignedUrgent.priority}\n\n**Recommended:** Assign to ${recommendedTech.name}\n- Has ${recommendedTech.inventory.length} parts on truck\n\n**Awaiting Architect approval.**`,
-          status: 'PENDING',
-          requiresApproval: true,
-          tokensUsed: { input: 1800, output: 150 },
-          cost: calculateCost('DISPATCH', 1800, 150),
+          content: `[REROUTE] **Assignment Queue**\n\nGenerating proposals for ${ticketsToAssign.length} unassigned ticket${ticketsToAssign.length > 1 ? 's' : ''}.\n\n**Awaiting Architect approval for each.**`,
+          status: 'EXECUTED',
+          tokensUsed: { input: 800, output: 80 },
+          cost: calculateCost('DISPATCH', 800, 80),
         });
 
-        // Emit action for approval
-        this.emitAction({
-          id: crypto.randomUUID(),
-          agentId: 'DISPATCH',
-          actionType: 'ASSIGN_TECH',
-          description: `Assign ${recommendedTech.name} to Ticket #${unassignedUrgent.ticketNumber}`,
-          preview: `This will:\n• Assign ${recommendedTech.name} to ${unassignedUrgent.title}\n• Customer: ${unassignedUrgent.customerName}\n• Location: ${unassignedUrgent.address || 'No address'}`,
-          data: {
-            ticketId: unassignedUrgent.id,
-            technicianId: recommendedTech.id,
-            ticketNumber: unassignedUrgent.ticketNumber,
-          },
-          status: 'PENDING_APPROVAL',
-          createdAt: new Date(),
-        });
+        for (let i = 0; i < ticketsToAssign.length; i++) {
+          const t = ticketsToAssign[i];
+          const tech = availableTechs[i % availableTechs.length];
+
+          await this.delay(300);
+          this.emitMessage({
+            id: crypto.randomUUID(),
+            timestamp: new Date(),
+            fromAgent: 'DISPATCH',
+            toAgent: 'ARCHITECT',
+            type: 'RESPONSE',
+            content: `[PROPOSE] Ticket #${t.ticketNumber} → ${tech.name}\n- ${t.title}\n- Customer: ${t.customerName}\n- Priority: ${t.priority || 'normal'}\n- Location: ${t.address || 'No address'}${t.city ? `, ${t.city}` : ''}`,
+            status: 'PENDING',
+            requiresApproval: true,
+            tokensUsed: { input: 600, output: 80 },
+            cost: calculateCost('DISPATCH', 600, 80),
+          });
+
+          this.emitAction({
+            id: crypto.randomUUID(),
+            agentId: 'DISPATCH',
+            actionType: 'ASSIGN_TECH',
+            description: `Assign ${tech.name} to Ticket #${t.ticketNumber}`,
+            preview: `This will:\n• Assign ${tech.name} to "${t.title}"\n• Customer: ${t.customerName}\n• Location: ${t.address || 'No address'}${t.city ? `, ${t.city}` : ''}\n• Priority: ${t.priority || 'normal'}`,
+            data: {
+              ticketId: t.id,
+              technicianId: tech.id,
+              technicianName: tech.name,
+              ticketNumber: t.ticketNumber,
+            },
+            status: 'PENDING_APPROVAL',
+            createdAt: new Date(),
+          });
+        }
       }
 
       // Step 5: CRM Opportunity Strike - Check for upsell opportunities
@@ -730,7 +752,7 @@ class AgentOrchestrator {
         fromAgent: 'ORCHESTRATOR',
         toAgent: 'ALL',
         type: 'RESPONSE',
-        content: `[COMPLETE] **Live Analysis Summary**\n\n- Open Tickets: ${tickets.length}\n- Urgent: ${urgentTickets.length}\n- Active Technicians: ${techsWithInventory.length}\n- Reorder Alerts: ${reorderAlerts.length}${upsellNote}${miningNote}\n- Pending Actions: ${pendingCount}\n\n**Live data sync complete.**`,
+        content: `[COMPLETE] **Live Analysis Summary**\n\n- Open Tickets: ${tickets.length}\n- Unassigned: ${unassignedTickets.length}\n- Urgent/High: ${urgentTickets.length}\n- Active Technicians: ${techsWithInventory.length}\n- Reorder Alerts: ${reorderAlerts.length}${upsellNote}${miningNote}\n- Pending Actions: ${pendingCount}\n\n**Live data sync complete.**`,
         status: 'EXECUTED',
         tokensUsed: { input: 300, output: 80 },
         cost: calculateCost('ORCHESTRATOR', 300, 80),
@@ -740,8 +762,8 @@ class AgentOrchestrator {
       this.lastLiveAnalysis = {
         tickets,
         technicians: techsWithInventory,
-        selectedTicket: unassignedUrgent || urgentTickets[0] || tickets[0] || null,
-        recommendedTech: recommendedTech?.id || null,
+        selectedTicket: unassignedTickets[0] || urgentTickets[0] || tickets[0] || null,
+        recommendedTech: availableTechs[0]?.id || null,
         equipmentIntelligence,
         salesIntelligence,
         latentOpportunities,

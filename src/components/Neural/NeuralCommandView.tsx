@@ -38,6 +38,7 @@ import {
   Mail,
 } from 'lucide-react';
 import { orchestrator, MORNING_DISPATCH_DEMO, LiveAnalysisResult } from '../../services/agents/AgentOrchestrator';
+import { supabase } from '../../lib/supabase';
 import { AgentMessage, AgentAction, SessionStats, AGENT_CONFIGS, AgentId } from '../../types/agents';
 import { EquipmentIntelligence, CustomerSalesIntelligence, LatentSalesOpportunity } from '../../services/agents/LiveDataService';
 
@@ -320,27 +321,49 @@ export default function NeuralCommandView() {
     setLiveAnalysis(null);
   };
 
-  const handleApprove = (actionId: string) => {
+  const handleApprove = async (actionId: string) => {
     const action = pendingActions.find(a => a.id === actionId);
 
-    // Visual transitions based on action type
     if (action?.actionType === 'ASSIGN_TECH') {
-      setTicket(t => ({ ...t, status: 'assigned', assignedTo: 'mike' }));
+      const ticketId = action.data.ticketId as string;
+      const technicianId = action.data.technicianId as string;
+      const technicianName = action.data.technicianName as string || 'Technician';
+
+      // Write to Supabase
+      const { error } = await supabase
+        .from('tickets')
+        .update({ assigned_to: technicianId })
+        .eq('id', ticketId);
+
+      if (error) {
+        console.error('[Neural Command] Failed to assign ticket in DB:', error);
+      } else {
+        console.log(`[Neural Command] Ticket ${ticketId} assigned to ${technicianId} in database.`);
+      }
+
+      // Visual update on canvas
+      setTicket(t => ({ ...t, status: 'assigned', assignedTo: technicianId }));
       setTechnicians(techs => techs.map(t =>
-        t.id === 'mike' ? { ...t, status: 'assigned' } : t
+        t.id === technicianId ? { ...t, status: 'assigned' } : t
       ));
       setCanvasHighlight('assignment');
       setTimeout(() => {
         setTicket(t => ({ ...t, status: 'en-route' }));
         setTechnicians(techs => techs.map(t =>
-          t.id === 'mike' ? { ...t, status: 'en-route' } : t
+          t.id === technicianId ? { ...t, status: 'en-route' } : t
         ));
         setCanvasHighlight(null);
       }, 1500);
+
+      // Emit confirmation to swarm feed
+      orchestrator.approveAction(actionId);
+      setPendingActions([...orchestrator.getPendingActions()]);
+      setMessages([...orchestrator.getMessages()]);
+      return;
     }
 
     if (action?.actionType === 'SEND_MESSAGE') {
-      setNotification({ sent: true, message: 'SMS sent to Johnson Residence' });
+      setNotification({ sent: true, message: `SMS sent to ${action.data.customerName || 'customer'}` });
       setCanvasHighlight('notification-sent');
       setTimeout(() => setCanvasHighlight(null), 2000);
     }
